@@ -485,17 +485,21 @@ run(LV2_Handle instance, uint32_t n_samples)
 	const float        freqmlp = *(zameq2->freqmlp);
 
 	//Lowshelf
+	if (boostdbl !=0){//Avoids calcs if gain is 0
 	bw_shelfeq(boostdbl,freql,slopedbl,0,zameq2->srate,zameq2->Bl,zameq2->Al);
-
-	//Peak 1	
+	}
+	//Peak 1
+	if (boostdb1 !=0){//Avoids calcs if gain is 0	
 	peq(boostdb1,q1,freq1,zameq2->srate,&zameq2->a0x,&zameq2->a1x,&zameq2->a2x,&zameq2->b0x,&zameq2->b1x,&zameq2->b2x,&zameq2->gainx);
-
+	}
 	//Peak 2
+	if (boostdb2 !=0){//Avoids calcs if gain is 0
 	peq(boostdb2,q2,freq2,zameq2->srate,&zameq2->a0y,&zameq2->a1y,&zameq2->a2y,&zameq2->b0y,&zameq2->b1y,&zameq2->b2y,&zameq2->gainy);
-
+	}
 	//Highshelf
+	if (boostdbh !=0){//Avoids calcs if gain is 0
 	bw_shelfeq(boostdbh,freqh,slopedbh,1,zameq2->srate,zameq2->Bh,zameq2->Ah);
-	
+	}
 	//Low Pass with no resonance
 	if (mlptype !=0){//if filter is not bypassed
 	mlpeq(freqmlp,0.71f,mlptype,zameq2->srate,&zameq2->a0lp,&zameq2->a1lp,&zameq2->a2lp,&zameq2->b1lp,&zameq2->b2lp);
@@ -530,20 +534,21 @@ run(LV2_Handle instance, uint32_t n_samples)
 		//Cascade filters Using a function for Direct Form I this way filters could be bypassed
 		
 		//lowshelf
-
+		if (boostdbl !=0){//Avoids processing if gain is 0
 		calculate_directformI(&in,&zameq2->zln1,&zameq2->zln2,&zameq2->zld1,&zameq2->zld2,zameq2->Bl[0],zameq2->Bl[1],zameq2->Bl[2],zameq2->Al[1],zameq2->Al[2]);
-
+		}
 		//parametric1
-
+		if (boostdb1 !=0){//Avoids processing if gain is 0
 		calculate_directformI(&in,&zameq2->x1,&zameq2->x2,&zameq2->y1,&zameq2->y2,zameq2->b0x,zameq2->b1x,zameq2->b2x,zameq2->a1x,zameq2->a2x);
-		
+		}
 		//parametric2
-
+		if (boostdb2 !=0){//Avoids processing if gain is 0
 		calculate_directformI(&in,&zameq2->x1a,&zameq2->x2a,&zameq2->y1a,&zameq2->y2a,zameq2->b0y,zameq2->b1y,zameq2->b2y,zameq2->a1y,zameq2->a2y);
-
+		}
 		//highshelf
+		if (boostdbh !=0){//Avoids processing if gain is 0
 		calculate_directformI(&in,&zameq2->zhn1,&zameq2->zhn2,&zameq2->zhd1,&zameq2->zhd2,zameq2->Bh[0],zameq2->Bh[1],zameq2->Bh[2],zameq2->Ah[1],zameq2->Ah[2]);
-
+		}
 		//lowpass
 		if (mlptype !=0){//if filter is not bypassed
 		calculate_directformI(&in,&zameq2->x1lp,&zameq2->x2lp,&zameq2->y1lp,&zameq2->y2lp,zameq2->a0lp,zameq2->a1lp,zameq2->a2lp,zameq2->b1lp,zameq2->b2lp);
