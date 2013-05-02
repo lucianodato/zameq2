@@ -25,7 +25,12 @@ typedef enum {
 
 	ZAMEQ2_BOOSTDBH = 11,
 	ZAMEQ2_SLOPEDBH = 12,
-	ZAMEQ2_FREQH = 13
+	ZAMEQ2_FREQH = 13,
+
+	//lp
+	ZAMEQ2_MLPQ = 14,
+	ZAMEQ2_FREQMLP = 15
+
 } PortIndex;
 
 typedef struct {
@@ -48,12 +53,19 @@ typedef struct {
 	float* slopedbh;
 	float* freqh;
 
+	float* mlpq;
+	float* freqmlp;
+
 	float x1,x2,y1,y2;
 	float x1a,x2a,y1a,y2a;
 	float zln1,zln2,zld1,zld2;
 	float zhn1,zhn2,zhd1,zhd2;
 	float a0x,a1x,a2x,b0x,b1x,b2x,gainx;
 	float a0y,a1y,a2y,b0y,b1y,b2y,gainy;
+	//lp
+	float a0lp,a1lp,a2lp,b1lp,b2lp;
+	float x1lp,x2lp,y1lp,y2lp;
+
 	float Bl[3];
 	float Al[3];
 	float Bh[3];
@@ -74,12 +86,14 @@ instantiate(const LV2_Descriptor*     descriptor,
 	zameq2->srate = rate;
 	zameq2->x1=zameq2->x2=zameq2->y1=zameq2->y2=0.f;
 	zameq2->x1a=zameq2->x2a=zameq2->y1a=zameq2->y2a=0.f;
-	zameq2->zln1a=zameq2->zln2a=zameq2->zld1a=zameq2->zld2a=0.f;
-	zameq2->zln1b=zameq2->zln2b=zameq2->zld1b=zameq2->zld2b=0.f;	
 	zameq2->a0x=zameq2->a1x=zameq2->a2x=zameq2->b0x=zameq2->b1x=zameq2->b2x=zameq2->gainx=0.f;
 	zameq2->a0y=zameq2->a1y=zameq2->a2y=zameq2->b0y=zameq2->b1y=zameq2->b2y=zameq2->gainy=0.f;
 	zameq2->zln1=zameq2->zln2=zameq2->zld1=zameq2->zld2=0.f;
 	zameq2->zhn1=zameq2->zhn2=zameq2->zhd1=zameq2->zhd2=0.f;
+	
+	//lp
+	zameq2->a0lp=zameq2->a1lp=zameq2->a2lp=zameq2->b1lp=zameq2->b2lp=0.f;
+	zameq2->x1lp=zameq2->x2lp=zameq2->y1lp=zameq2->y2lp=0.f;
 
 	for (i = 0; i < 3; ++i) {
 		zameq2->Bl[i] = zameq2->Al[i] = zameq2->Bh[i] = zameq2->Ah[i] = 0.f;
@@ -140,6 +154,12 @@ connect_port(LV2_Handle instance,
 	case ZAMEQ2_FREQH:
 		zameq2->freqh = (float*)data;
 		break;
+	case ZAMEQ2_MLPQ:
+		zameq2->mlpq = (float*)data;//lp
+		break;
+	case ZAMEQ2_FREQMLP:
+		zameq2->freqmlp = (float*)data;//lp
+		break;
 	}
 }
 
@@ -175,19 +195,25 @@ to_dB(float g) {
         return (20.f*log10(g));
 }
 
-static float
-arcsinh (float x) {
-	return (log(2.f*x+sqrt(x*x+1.f)));
-}
-
 static void
 activate(LV2_Handle instance)
 {
 }
 
+//Orfanidis Peak filter (decramped)
 static void
-peq(float G0, float G, float GB, float w0, float Dw,
-        float *a0, float *a1, float *a2, float *b0, float *b1, float *b2, float *gn) {
+peq(float boostdb, float Q, float freq, float srate,float *a0, float *a1, float *a2, float *b0, float *b1, float *b2, float *gn) {
+
+	float boost = from_dB(boostdb);
+  	float fc = freq / srate;
+	float w0 = fc*2.f*M_PI;
+	float bwgain = (boostdb == 0.f) ? 1.f : (boostdb < 0.f) ? boost*from_dB(3.f) : boost*from_dB(-3.f);
+	float bw = fc / Q;
+
+	float G0=1.f; //dcgain
+	float G=boost;
+	float GB=bwgain;
+	float Dw=bw;	
 
         float F,G00,F00,num,den,G1,G01,G11,F01,F11,W2,Dww,C,D,B,A;
         F = fabs(G*G - GB*GB);
@@ -225,54 +251,143 @@ peq(float G0, float G, float GB, float w0, float Dw,
         if (is_nan(*b0)) { *b0 = 1.f; }
 }
 
-static bool
-lowshelfeq(float G0, float G, float GB, float w0, float Dw, float q,
-		float B[], float A[]) {
- 	float alpha,b0,b1,b2,a0,a1,a2;
+//Michale Massberg 2nd Order Lowpass Filter
+static void
+mlpeq(float freqcutoff,float fQ,float srate,float *a0lp,float *a1lp,float *a2lp,float *b1lp,float *b2lp) {
+
+	// use same terms as in the picture
+	float omegaC = 2.f*M_PI*(freqcutoff/srate);
+
+	float m = pow((pow(2.f, 0.5f)*M_PI)/ omegaC, 2.f);
+	float n = pow(2.f*M_PI/ (fQ*omegaC), 2.f);
+	float denom = pow(pow(2.f - m, 2.f) + n, 0.5f);
+
+	// step 1: find g1 the gain at Nyquist
+	float g1 = 2.f/denom;
+	
+	// branch on Q
+	float omegaR = 0.f;
+	float omegaS = 0.f;
+	float omegaM = 0.f;
+
+	// if > 0.707
+	if(fQ > pow(0.5f, 0.5f)) 
+	{
+		// resonant gain (standard equation)
+		float gr = 2.f*pow(fQ, 2.f)/ pow(4.f*pow(fQ, 2.f) - 1.f, 0.5f);
+		float wr = omegaC*pow(1.f - (1.f/(2.f*fQ*fQ)) , 0.5f);
+		omegaR = tan(wr/2.f); // NOTE this is wr/2fs in the paper - do fs cancel out from wn calc?
+
+		float o = (gr*gr - g1*g1)/(gr*gr - 1.f);
+		omegaS = omegaR*pow(o, 0.25f); // cube root
+	}
+	else
+	{
+		float a = 2.f - 1.f/ (fQ*fQ);
+		float b = pow(1.f - (4.f*fQ*fQ)/ fQ*fQ*fQ*fQ + 4.f/g1, 0.5f);
+
+		float coeff = pow((a+b)/2.f,0.5f);
+		float wr = omegaC*coeff;
+
+		omegaM = tan(wr/2.f);
+		omegaS = (omegaC*pow((1.f - g1*g1), 0.25f))/2.f;
+		omegaS = fminf(omegaS, omegaM);
+	}
+
+	// calc peak freq
+	float wp = (2.f)*atan(omegaS);
+
+	float q = pow(wp/omegaC, 2.f);
+	float r = pow(wp/(fQ*omegaC), 2.f);
+
+	// calc gain at POLE
+	float gp = 1.f/pow( pow(1.f - q, 2.f) + r, 0.5f);
+	
+	// calculate gain at ZERO
+	float wz = (2.f)*atan(omegaS/pow(g1, 0.5f));
+
+	q = pow(wz/omegaC, 2.f);
+	r = pow(wz/(fQ*omegaC), 2.f);
+
+	// calc gain at ZERO
+	float gz = 1.f/pow( pow(1.f - q, 2.f) + r, 0.5f);
+
+	// calculalte required Q @ POLE
+	float qp = pow((g1*(gp*gp - gz*gz))/ ((g1 + gz*gz)*(pow(g1 - 1.f, 2.f))), 0.5f);
+
+	// calculalte required Q @ ZERO
+	float num = g1*g1*(gp*gp - gz*gz);
+	float den = gz*gz*(g1 + gp*gp)*(g1 - 1.f)*(g1 - 1.f);
+	float qz = pow(num/den, 0.5f);
+
+	// finally calc the coeffs
+	float a0 = omegaS*omegaS + omegaS/qp + 1.f;
+	
+	float alpha0 = omegaS*omegaS + omegaS*pow(g1, 0.5f)/qz + g1;
+	float alpha1 = 2.f*(omegaS*omegaS - g1);
+	float alpha2 = omegaS*omegaS - omegaS*pow(g1, 0.5f)/qz + g1;
+
+	float beta1 = 2.f*(omegaS*omegaS - 1.f);
+	float beta2 = omegaS*omegaS - omegaS/qp + 1.f;
+
+	*a0lp = alpha0/a0;
+	*a1lp = alpha1/a0;
+	*a2lp = alpha2/a0;
+	*b1lp = beta1/a0;
+	*b2lp = beta2/a0;
+
+	sanitize_denormal(*b1lp);
+        sanitize_denormal(*b2lp);
+        sanitize_denormal(*a0lp);
+        sanitize_denormal(*a1lp);
+        sanitize_denormal(*a2lp);
+
+}
+
+//Butterworth Shelf Filters
+static void
+bw_shelfeq(float boostdb, float freq,float q,float type, float srate,float B[], float A[]) {
+	//lowshelfeq(float G0, float G, float GB, float w0, float Dw, float q,float B[], float A[])	
+	//lowshelfeq(0.f,boostdbl,bwgaindbl,2.f*M_PI*freql/zameq2->srate,bwl,slopedbl,zameq2->Bl,zameq2->Al);
+	//shelfeq(boostdbl,freql,0,zameq2->srate,zameq2->Bl,zameq2->Al);
+	
+	float w0 = 2.f*M_PI*freq/ srate;
+	float G = boostdb;
+
+	float alpha,b0,b1,b2,a0,a1,a2;
 	G = powf(10.f,G/20.f); 
 	float AA  = sqrt(G);
 	
-	alpha = sin(w0)/2.f * sqrt( (AA + 1.f/AA)*(1.f/q - 1.f) + 2.f );
-	b0 =    AA*( (AA+1.f) - (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha );
-        b1 =  2.f*AA*( (AA-1.f) - (AA+1.f)*cos(w0)                   );
-        b2 =    AA*( (AA+1.f) - (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha );
-        a0 =        (AA+1.f) + (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha;
-        a1 =   -2.f*( (AA-1.f) + (AA+1.f)*cos(w0)                   );
-        a2 =        (AA+1.f) + (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha;
+	if (type == 0) {
+
+		alpha = sin(w0)/2.f * sqrt( (AA + 1.f/AA)*(1.f/q - 1.f) + 2.f );
+		b0 =    AA*( (AA+1.f) - (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha );
+		b1 =  2.f*AA*( (AA-1.f) - (AA+1.f)*cos(w0)                   );
+		b2 =    AA*( (AA+1.f) - (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha );
+		a0 =        (AA+1.f) + (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha;
+		a1 =   -2.f*( (AA-1.f) + (AA+1.f)*cos(w0)                   );
+		a2 =        (AA+1.f) + (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha;
 	
+	}
+	else
+	{
+
+		alpha = sin(w0)/2.f * sqrt( (AA + 1.f/AA)*(1.f/q - 1.f) + 2.f );
+		b0 =    AA*( (AA+1.f) + (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha );
+		b1 =  -2.f*AA*( (AA-1.f) + (AA+1.f)*cos(w0)                   );
+		b2 =    AA*( (AA+1.f) + (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha );
+		a0 =        (AA+1.f) - (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha;
+		a1 =   2.f*( (AA-1.f) - (AA+1.f)*cos(w0)                   );
+		a2 =        (AA+1.f) - (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha;
+
+	}
+
 	B[0] = b0/a0;
-        B[1] = b1/a0;
-        B[2] = b2/a0;
-        A[0] = 1.f;
-        A[1] = a1/a0;
-        A[2] = a2/a0;
-
-	return true;
-}
-
-static bool
-highshelfeq(float G0, float G, float GB, float w0, float Dw, float q,
-		float B[], float A[]) {
-        float alpha,b0,b1,b2,a0,a1,a2;
-        G = powf(10.f,G/20.f);
-        float AA  = sqrt(G);
-
-        alpha = sin(w0)/2.f * sqrt( (AA + 1.f/AA)*(1.f/q - 1.f) + 2.f );
-        b0 =    AA*( (AA+1.f) + (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha );
-        b1 =  -2.f*AA*( (AA-1.f) + (AA+1.f)*cos(w0)                   );
-        b2 =    AA*( (AA+1.f) + (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha );
-        a0 =        (AA+1.f) - (AA-1.f)*cos(w0) + 2.f*sqrt(AA)*alpha;
-        a1 =   2.f*( (AA-1.f) - (AA+1.f)*cos(w0)                   );
-        a2 =        (AA+1.f) - (AA-1.f)*cos(w0) - 2.f*sqrt(AA)*alpha;
-
-        B[0] = b0/a0;
-        B[1] = b1/a0;
-        B[2] = b2/a0;
-        A[0] = 1.f;
-        A[1] = a1/a0;
-        A[2] = a2/a0;
-
-        return true;
+	B[1] = b1/a0;
+	B[2] = b2/a0;
+	A[0] = 1.f;
+	A[1] = a1/a0;
+	A[2] = a2/a0;
 }
 
 static void
@@ -299,38 +414,29 @@ run(LV2_Handle instance, uint32_t n_samples)
 	const float        slopedbh = *(zameq2->slopedbh);
 	const float        freqh = *(zameq2->freqh);
 
-	float dcgain = 1.f;
+	const float        mlpq = *(zameq2->mlpq);
+	const float        freqmlp = *(zameq2->freqmlp);
+
+	//Low Pass
+	mlpeq(freqmlp,mlpq,zameq2->srate,&zameq2->a0lp,&zameq2->a1lp,&zameq2->a2lp,&zameq2->b1lp,&zameq2->b2lp);
+
+	//Peak 1	
+	peq(boostdb1,q1,freq1,zameq2->srate,&zameq2->a0x,&zameq2->a1x,&zameq2->a2x,&zameq2->b0x,&zameq2->b1x,&zameq2->b2x,&zameq2->gainx);
+
+	//Peak 2
+	peq(boostdb2,q2,freq2,zameq2->srate,&zameq2->a0y,&zameq2->a1y,&zameq2->a2y,&zameq2->b0y,&zameq2->b1y,&zameq2->b2y,&zameq2->gainy);
+
+	//Lowshelf
+	bw_shelfeq(boostdbl,freql,slopedbl,0,zameq2->srate,zameq2->Bl,zameq2->Al);
 	
-	float boost1 = from_dB(boostdb1);
-  	float fc1 = freq1 / zameq2->srate;
-	float w01 = fc1*2.f*M_PI;
-	float bwgain1 = (boostdb1 == 0.f) ? 1.f : (boostdb1 < 0.f) ? boost1*from_dB(3.f) : boost1*from_dB(-3.f);
-	float bw1 = fc1 / q1;
-
-	float boost2 = from_dB(boostdb2);
-  	float fc2 = freq2 / zameq2->srate;
-	float w02 = fc2*2.f*M_PI;
-	float bwgain2 = (boostdb2 == 0.f) ? 1.f : (boostdb2 < 0.f) ? boost2*from_dB(3.f) : boost2*from_dB(-3.f);
-	float bw2 = fc2 / q2;
-
-	float boostl = from_dB(boostdbl);
-	float All = sqrt(boostl);
-	float bwl = 2.f*M_PI*freql/ zameq2->srate;
-	float bwgaindbl = to_dB(All);
+	//Highshelf
+	bw_shelfeq(boostdbh,freqh,slopedbh,1,zameq2->srate,zameq2->Bh,zameq2->Ah);
 	
-	float boosth = from_dB(boostdbh);
-	float Ahh = sqrt(boosth);
-	float bwh = 2.f*M_PI*freqh/ zameq2->srate;
-	float bwgaindbh = to_dB(Ahh);
-
-	peq(dcgain,boost1,bwgain1,w01,bw1,&zameq2->a0x,&zameq2->a1x,&zameq2->a2x,&zameq2->b0x,&zameq2->b1x,&zameq2->b2x,&zameq2->gainx);
-	peq(dcgain,boost2,bwgain2,w02,bw2,&zameq2->a0y,&zameq2->a1y,&zameq2->a2y,&zameq2->b0y,&zameq2->b1y,&zameq2->b2y,&zameq2->gainy);
-	lowshelfeq(0.f,boostdbl,bwgaindbl,2.f*M_PI*freql/zameq2->srate,bwl,slopedbl,zameq2->Bl,zameq2->Al);
-	highshelfeq(0.f,boostdbh,bwgaindbh,2.f*M_PI*freqh/zameq2->srate,bwh,slopedbh,zameq2->Bh,zameq2->Ah);
-
 	for (uint32_t pos = 0; pos < n_samples; pos++) {
-		float tmp,tmpl, tmph;
+	
+		float tmp,tmpl,tmph,tmplp;
 		float in = input[pos];
+		
 		sanitize_denormal(zameq2->x1);
 		sanitize_denormal(zameq2->x2);
 		sanitize_denormal(zameq2->y1);
@@ -339,6 +445,10 @@ run(LV2_Handle instance, uint32_t n_samples)
 		sanitize_denormal(zameq2->x2a);
 		sanitize_denormal(zameq2->y1a);
 		sanitize_denormal(zameq2->y2a);
+		sanitize_denormal(zameq2->x1lp);
+		sanitize_denormal(zameq2->x2lp);
+		sanitize_denormal(zameq2->y1lp);
+		sanitize_denormal(zameq2->y2lp);
 		sanitize_denormal(zameq2->zln1);
 		sanitize_denormal(zameq2->zln2);
 		sanitize_denormal(zameq2->zld1);
@@ -349,15 +459,28 @@ run(LV2_Handle instance, uint32_t n_samples)
 		sanitize_denormal(zameq2->zhd2);
 		sanitize_denormal(in);
 
+		//Cascade filters Using Direct Form I - //y(n) = a0x(n) + a1x(n-1) + a2x(n-2) - b1y(n-1) - b2y(n-2)
+		
+		//lowpass
+		tmplp = in * zameq2->a0lp + 
+			zameq2->a1lp*zameq2->x1lp +
+			zameq2->a2lp*zameq2->x2lp - 
+			zameq2->b1lp*zameq2->y1lp - 
+			zameq2->b2lp*zameq2->y2lp;
+		zameq2->x2lp=zameq2->x1lp;
+		zameq2->y2lp=zameq2->y1lp;
+		zameq2->x1lp=in;
+		zameq2->y1lp=tmplp;
+
 		//lowshelf
-		tmpl = in * zameq2->Bl[0] + 
+		tmpl = tmplp * zameq2->Bl[0] + 
 			zameq2->zln1 * zameq2->Bl[1] +
 			zameq2->zln2 * zameq2->Bl[2] -
 			zameq2->zld1 * zameq2->Al[1] -
 			zameq2->zld2 * zameq2->Al[2];
 		zameq2->zln2 = zameq2->zln1;
 		zameq2->zld2 = zameq2->zld1;
-		zameq2->zln1 = in;
+		zameq2->zln1 = tmplp;
 		zameq2->zld1 = tmpl;
 		
 		//highshelf
