@@ -53,12 +53,6 @@ zameq2$(LIB_EXT): zameq2.c
 		zameq2.c \
 		$(LV2FLAGS) $(LDFLAGS)
 
-#zamcomp_gui$(LIB_EXT): zamcomp_gui.cpp zamcomp.peg
-#	$(CXX) -o zamcomp_gui$(LIB_EXT) \
-#		$(CXXFLAGS) \
-#		zamcomp_gui.cpp \
-#		$(LV2GUIFLAGS) $(LDFLAGS)
-
 zameq2.peg: zameq2.ttl
 	lv2peg zameq2.ttl zameq2.peg
 

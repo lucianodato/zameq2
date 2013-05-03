@@ -266,7 +266,7 @@ peq(float boostdb, float Q, float freq, float srate,float *a0, float *a1, float 
         if (is_nan(*b0)) { *b0 = 1.f; }
 }
 
-//Michale Massberg 2nd Order Lowpass Filter
+//Michale Massberg 1st and 2nd Order Lowpass Filter
 static void
 mlpeq(float freqcutoff,float fQ,float type,float srate,float *a0lp,float *a1lp,float *a2lp,float *b1lp,float *b2lp) {
 
@@ -484,78 +484,88 @@ run(LV2_Handle instance, uint32_t n_samples)
 	const int          mlptype = *(zameq2->mlptype);
 	const float        freqmlp = *(zameq2->freqmlp);
 
+	//this is a flag that indicates that if some filter is active so it doesn't enter the for cycle in case is not
+	bool is_active_flag = false;
+
 	//Lowshelf
 	if (boostdbl !=0){//Avoids calcs if gain is 0
 	bw_shelfeq(boostdbl,freql,slopedbl,0,zameq2->srate,zameq2->Bl,zameq2->Al);
+	is_active_flag = true;//some filter is active
 	}
 	//Peak 1
 	if (boostdb1 !=0){//Avoids calcs if gain is 0	
 	peq(boostdb1,q1,freq1,zameq2->srate,&zameq2->a0x,&zameq2->a1x,&zameq2->a2x,&zameq2->b0x,&zameq2->b1x,&zameq2->b2x,&zameq2->gainx);
+	is_active_flag = true;//some filter is active
 	}
 	//Peak 2
 	if (boostdb2 !=0){//Avoids calcs if gain is 0
 	peq(boostdb2,q2,freq2,zameq2->srate,&zameq2->a0y,&zameq2->a1y,&zameq2->a2y,&zameq2->b0y,&zameq2->b1y,&zameq2->b2y,&zameq2->gainy);
+	is_active_flag = true;//some filter is active
 	}
 	//Highshelf
 	if (boostdbh !=0){//Avoids calcs if gain is 0
 	bw_shelfeq(boostdbh,freqh,slopedbh,1,zameq2->srate,zameq2->Bh,zameq2->Ah);
+	is_active_flag = true;//some filter is active
 	}
 	//Low Pass with no resonance
 	if (mlptype !=0){//if filter is not bypassed
 	mlpeq(freqmlp,0.71f,mlptype,zameq2->srate,&zameq2->a0lp,&zameq2->a1lp,&zameq2->a2lp,&zameq2->b1lp,&zameq2->b2lp);
+	is_active_flag = true;//some filter is active
 	}
 
-	for (uint32_t pos = 0; pos < n_samples; pos++) {
+	if (is_active_flag == true){
+		for (uint32_t pos = 0; pos < n_samples; pos++) {
 	
-		float in = input[pos];
+			float in = input[pos];
 
-		sanitize_denormal(zameq2->x1);
-		sanitize_denormal(zameq2->x2);
-		sanitize_denormal(zameq2->y1);
-		sanitize_denormal(zameq2->y2);
-		sanitize_denormal(zameq2->x1a);
-		sanitize_denormal(zameq2->x2a);
-		sanitize_denormal(zameq2->y1a);
-		sanitize_denormal(zameq2->y2a);
-		sanitize_denormal(zameq2->x1lp);
-		sanitize_denormal(zameq2->x2lp);
-		sanitize_denormal(zameq2->y1lp);
-		sanitize_denormal(zameq2->y2lp);
-		sanitize_denormal(zameq2->zln1);
-		sanitize_denormal(zameq2->zln2);
-		sanitize_denormal(zameq2->zld1);
-		sanitize_denormal(zameq2->zld2);
-		sanitize_denormal(zameq2->zhn1);
-		sanitize_denormal(zameq2->zhn2);
-		sanitize_denormal(zameq2->zhd1);
-		sanitize_denormal(zameq2->zhd2);
-		sanitize_denormal(in);
+			sanitize_denormal(zameq2->x1);
+			sanitize_denormal(zameq2->x2);
+			sanitize_denormal(zameq2->y1);
+			sanitize_denormal(zameq2->y2);
+			sanitize_denormal(zameq2->x1a);
+			sanitize_denormal(zameq2->x2a);
+			sanitize_denormal(zameq2->y1a);
+			sanitize_denormal(zameq2->y2a);
+			sanitize_denormal(zameq2->x1lp);
+			sanitize_denormal(zameq2->x2lp);
+			sanitize_denormal(zameq2->y1lp);
+			sanitize_denormal(zameq2->y2lp);
+			sanitize_denormal(zameq2->zln1);
+			sanitize_denormal(zameq2->zln2);
+			sanitize_denormal(zameq2->zld1);
+			sanitize_denormal(zameq2->zld2);
+			sanitize_denormal(zameq2->zhn1);
+			sanitize_denormal(zameq2->zhn2);
+			sanitize_denormal(zameq2->zhd1);
+			sanitize_denormal(zameq2->zhd2);
+			sanitize_denormal(in);
 
-		//Cascade filters Using a function for Direct Form I this way filters could be bypassed
+			//Cascade filters Using a function for Direct Form I this way filters could be bypassed
 		
-		//lowshelf
-		if (boostdbl !=0){//Avoids processing if gain is 0
-		calculate_directformI(&in,&zameq2->zln1,&zameq2->zln2,&zameq2->zld1,&zameq2->zld2,zameq2->Bl[0],zameq2->Bl[1],zameq2->Bl[2],zameq2->Al[1],zameq2->Al[2]);
-		}
-		//parametric1
-		if (boostdb1 !=0){//Avoids processing if gain is 0
-		calculate_directformI(&in,&zameq2->x1,&zameq2->x2,&zameq2->y1,&zameq2->y2,zameq2->b0x,zameq2->b1x,zameq2->b2x,zameq2->a1x,zameq2->a2x);
-		}
-		//parametric2
-		if (boostdb2 !=0){//Avoids processing if gain is 0
-		calculate_directformI(&in,&zameq2->x1a,&zameq2->x2a,&zameq2->y1a,&zameq2->y2a,zameq2->b0y,zameq2->b1y,zameq2->b2y,zameq2->a1y,zameq2->a2y);
-		}
-		//highshelf
-		if (boostdbh !=0){//Avoids processing if gain is 0
-		calculate_directformI(&in,&zameq2->zhn1,&zameq2->zhn2,&zameq2->zhd1,&zameq2->zhd2,zameq2->Bh[0],zameq2->Bh[1],zameq2->Bh[2],zameq2->Ah[1],zameq2->Ah[2]);
-		}
-		//lowpass
-		if (mlptype !=0){//if filter is not bypassed
-		calculate_directformI(&in,&zameq2->x1lp,&zameq2->x2lp,&zameq2->y1lp,&zameq2->y2lp,zameq2->a0lp,zameq2->a1lp,zameq2->a2lp,zameq2->b1lp,zameq2->b2lp);
-		}
-		//finally
-		output[pos]=in;
+			//lowshelf
+			if (boostdbl !=0){//Avoids processing if gain is 0
+			calculate_directformI(&in,&zameq2->zln1,&zameq2->zln2,&zameq2->zld1,&zameq2->zld2,zameq2->Bl[0],zameq2->Bl[1],zameq2->Bl[2],zameq2->Al[1],zameq2->Al[2]);
+			}
+			//parametric1
+			if (boostdb1 !=0){//Avoids processing if gain is 0
+			calculate_directformI(&in,&zameq2->x1,&zameq2->x2,&zameq2->y1,&zameq2->y2,zameq2->b0x,zameq2->b1x,zameq2->b2x,zameq2->a1x,zameq2->a2x);
+			}
+			//parametric2
+			if (boostdb2 !=0){//Avoids processing if gain is 0
+			calculate_directformI(&in,&zameq2->x1a,&zameq2->x2a,&zameq2->y1a,&zameq2->y2a,zameq2->b0y,zameq2->b1y,zameq2->b2y,zameq2->a1y,zameq2->a2y);
+			}
+			//highshelf
+			if (boostdbh !=0){//Avoids processing if gain is 0
+			calculate_directformI(&in,&zameq2->zhn1,&zameq2->zhn2,&zameq2->zhd1,&zameq2->zhd2,zameq2->Bh[0],zameq2->Bh[1],zameq2->Bh[2],zameq2->Ah[1],zameq2->Ah[2]);
+			}
+			//lowpass
+			if (mlptype !=0){//if filter is not bypassed
+			calculate_directformI(&in,&zameq2->x1lp,&zameq2->x2lp,&zameq2->y1lp,&zameq2->y2lp,zameq2->a0lp,zameq2->a1lp,zameq2->a2lp,zameq2->b1lp,zameq2->b2lp);
+			}
+			//finally
+			output[pos]=in;
 
+		}
 	}
 }
 
